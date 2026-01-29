@@ -9,74 +9,96 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         body { margin: 0; display: flex; font-family: "Helvetica Neue", Arial, sans-serif; background: #1a1a1a; color: white; overflow: hidden; }
-        #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; z-index: 1000; }
-        #map-container { flex-grow: 1; position: relative; background: #104080; } 
-        #map { width: 100%; height: 100vh; background: transparent; }
+        #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; z-index: 2000; }
+        #map-container { flex-grow: 1; position: relative; background: #104080; overflow: hidden; } 
         
+        /* メインマップ */
+        .map-frame { width: 100%; height: 100vh; background: transparent; }
+        
+        /* インセット（別枠）のスタイル */
+        .inset-box {
+            position: absolute; background: #104080; border: 2px solid white; 
+            overflow: hidden; pointer-events: none; z-index: 1000;
+        }
+        #inset-okinawa { width: 280px; height: 200px; top: 10px; left: 10px; border-bottom-right-radius: 40px; border-right: 3px solid white; border-bottom: 3px solid white; }
+        #inset-ogasawara { width: 150px; height: 180px; bottom: 10px; right: 10px; border-top-left-radius: 40px; border-left: 3px solid white; border-top: 3px solid white; }
+        
+        .inset-label { position: absolute; background: rgba(0,0,0,0.6); padding: 2px 8px; font-size: 12px; z-index: 1100; }
+        #label-okinawa { top: 170px; left: 120px; }
+        #label-ogasawara { bottom: 150px; right: 50px; }
+
         .version-info { font-size: 11px; color: #888; text-align: right; margin-bottom: 5px; }
-        
         .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 4px; }
         .save-btn { width: 100%; padding: 12px; background: #28a745; color: white; border: none; cursor: pointer; margin-bottom: 20px; font-weight: bold; border-radius: 4px; }
         select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }
-        h3 { border-bottom: 2px solid #007bff; padding-bottom: 5px; font-size: 16px; margin-top: 0; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
-    <div class="version-info">Version 1.2.0</div>
+    <div class="version-info">Version 1.3.0</div>
     <button class="save-btn" onclick="saveImage()">PNG画像を生成・保存</button>
     <h3>津波予報区の設定</h3>
-    <div id="controls">データを読み込み中...</div>
+    <div id="controls">読み込み中...</div>
 </div>
 
 <div id="map-container">
-    <div id="map"></div>
+    <div id="map-main" class="map-frame"></div>
+    
+    <div id="inset-okinawa" class="inset-box">
+        <div id="map-okinawa" style="width:100%; height:100%;"></div>
+        <div id="label-okinawa" class="inset-label">沖縄・奄美</div>
+    </div>
+    
+    <div id="inset-ogasawara" class="inset-box">
+        <div id="map-ogasawara" style="width:100%; height:100%;"></div>
+        <div id="label-ogasawara" class="inset-label">小笠原</div>
+    </div>
 </div>
 
 <script>
-    const COLORS = {
-        'none': 'transparent',
-        'advisory': '#faff00',
-        'warning': '#ff2800',
-        'major': '#ff00ff'
+    const COLORS = { 'none': 'transparent', 'advisory': '#faff00', 'warning': '#ff2800', 'major': '#ff00ff' };
+    const RANK = { 'none': 0, 'advisory': 1, 'warning': 2, 'major': 3 };
+    const WEIGHTS = { 'major': 14, 'warning': 7, 'advisory': 7, 'none': 1 };
+
+    // 3つの地図オブジェクトを管理
+    var maps = {
+        main: L.map('map-main', { zoomSnap: 0.1, attributionControl: false, zoomControl: false }).setView([38.0, 137.0], 6),
+        okinawa: L.map('map-okinawa', { zoomSnap: 0.1, attributionControl: false, zoomControl: false, dragging: false, scrollWheelZoom: false }).setView([26.5, 127.0], 6),
+        ogasawara: L.map('map-ogasawara', { zoomSnap: 0.1, attributionControl: false, zoomControl: false, dragging: false, scrollWheelZoom: false }).setView([27.0, 142.2], 7)
     };
 
-    const RANK = { 'none': 0, 'advisory': 1, 'warning': 2, 'major': 3 };
+    var areaLayers = {}; // 地域名をキーに、各マップのレイヤーを配列で保持
 
-    // 大特警の太さを基準に設定
-    const BASE_WEIGHT = 14; 
-    const SUB_WEIGHT = 7; 
+    // データ読み込み
+    Promise.all([
+        fetch('prefectures.json').then(res => res.json()),
+        fetch('areas.json').then(res => res.json())
+    ]).then(([prefData, tsunamiData]) => {
+        const prefGeo = topojson.feature(prefData, prefData.objects[Object.keys(prefData.objects)[0]]);
+        const tsunamiGeo = topojson.feature(tsunamiData, tsunamiData.objects[Object.keys(tsunamiData.objects)[0]]);
 
-    var map = L.map('map', { zoomSnap: 0.1, attributionControl: false, zoomControl: false }).setView([36.5, 137.0], 5.5);
-    var areaData = {};
-
-    fetch('prefectures.json').then(res => res.json()).then(data => {
-        const layerName = Object.keys(data.objects)[0];
-        const geoData = topojson.feature(data, data.objects[layerName]);
-        L.geoJSON(geoData, {
-            style: { color: "#444", weight: 1, fillColor: "#ccc", fillOpacity: 1 }
-        }).addTo(map);
-    }).catch(e => console.log("都道府県背景なし"));
-
-    fetch('areas.json').then(res => res.json()).then(data => {
-        const layerName = Object.keys(data.objects)[0];
-        const geoData = topojson.feature(data, data.objects[layerName]);
-        
-        L.geoJSON(geoData, {
-            style: { fillColor: 'transparent', fillOpacity: 0, weight: 1, color: '#666' },
-            onEachFeature: function (feature, layer) {
-                const name = feature.properties.name || feature.properties.NAM || "不明";
-                areaData[name] = { layer: layer, status: 'none' };
-            }
-        }).addTo(map);
+        Object.keys(maps).forEach(key => {
+            const m = maps[key];
+            // 陸地描画
+            L.geoJSON(prefGeo, { style: { color: "#444", weight: 1, fillColor: "#ccc", fillOpacity: 1 } }).addTo(m);
+            
+            // 津波予報区描画
+            L.geoJSON(tsunamiGeo, {
+                style: { weight: 1, color: '#666', fillColor: 'transparent', fillOpacity: 0 },
+                onEachFeature: function (feature, layer) {
+                    const name = feature.properties.name || feature.properties.NAM || "不明";
+                    if (!areaLayers[name]) areaLayers[name] = [];
+                    areaLayers[name].push(layer);
+                }
+            }).addTo(m);
+        });
         createControls();
     });
 
     function createControls() {
         const container = document.getElementById('controls');
-        container.innerHTML = '';
-        Object.keys(areaData).sort().forEach(name => {
+        Object.keys(areaLayers).sort().forEach(name => {
             const div = document.createElement('div');
             div.className = 'area-item';
             div.innerHTML = `<span>${name}</span><select onchange="updateArea('${name}', this.value)"><option value="none">ー</option><option value="advisory">注意報</option><option value="warning">警報</option><option value="major">大特警</option></select>`;
@@ -85,32 +107,18 @@
     }
 
     function updateArea(name, status) {
-        const item = areaData[name];
-        if(!item) return;
-        item.status = status;
-        renderAllLayers();
-    }
+        const layers = areaLayers[name];
+        if(!layers) return;
 
-    function renderAllLayers() {
-        const sortedAreas = Object.values(areaData).sort((a, b) => RANK[a.status] - RANK[b.status]);
-        
-        sortedAreas.forEach(item => {
-            const status = item.status;
-            if (status === 'none') {
-                item.layer.setStyle({ color: '#666', weight: 1, opacity: 1 });
-            } else {
-                const weightValue = (status === 'major') ? BASE_WEIGHT : SUB_WEIGHT;
-                item.layer.setStyle({
-                    color: COLORS[status],
-                    weight: weightValue,
-                    opacity: 1,
-                    // 重要：線の端を丸めず、ぷつっと切る設定
-                    lineCap: 'butt', 
-                    lineJoin: 'miter', 
-                    fillOpacity: 0
-                });
-                item.layer.bringToFront();
-            }
+        layers.forEach(layer => {
+            const weight = WEIGHTS[status];
+            layer.setStyle({
+                color: status === 'none' ? '#666' : COLORS[status],
+                weight: weight,
+                lineCap: 'butt',
+                lineJoin: 'miter'
+            });
+            if (status !== 'none') layer.bringToFront();
         });
     }
 
@@ -120,7 +128,7 @@
         btn.innerText = "生成中...";
         html2canvas(container, { useCORS: true, scale: 2 }).then(canvas => {
             const link = document.createElement("a");
-            link.download = `tsunami_map_v1.2.0_${Date.now()}.png`;
+            link.download = `tsunami_map_v1.3.0_${Date.now()}.png`;
             link.href = canvas.toDataURL();
             link.click();
             btn.innerText = "PNG画像を生成・保存";
