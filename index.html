@@ -8,14 +8,21 @@
     <script src="https://unpkg.com/topojson-client@3"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
-        body { margin: 0; display: flex; font-family: "Helvetica Neue", Arial, sans-serif; background: #1a1a1a; color: white; }
-        #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; }
-        #map-container { flex-grow: 1; position: relative; background: #000022; } /* 宇宙のような深い紺 */
+        body { margin: 0; display: flex; font-family: "Helvetica Neue", Arial, sans-serif; background: #1a1a1a; color: white; overflow: hidden; }
+        
+        /* サイドバーの設定 */
+        #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; z-index: 1000; }
+        
+        /* マップエリアの設定（画像2に近い鮮やかな青） */
+        #map-container { flex-grow: 1; position: relative; background: #104080; } 
         #map { width: 100%; height: 100vh; background: transparent; }
-        .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* UIパーツ */
+        .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 4px; }
         .save-btn { width: 100%; padding: 12px; background: #28a745; color: white; border: none; cursor: pointer; margin-bottom: 20px; font-weight: bold; border-radius: 4px; }
-        select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }
-        h3 { border-bottom: 2px solid #007bff; padding-bottom: 5px; font-size: 16px; }
+        .save-btn:hover { background: #218838; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; cursor: pointer; }
+        h3 { border-bottom: 2px solid #007bff; padding-bottom: 5px; font-size: 16px; margin-top: 0; }
     </style>
 </head>
 <body>
@@ -31,30 +38,36 @@
 </div>
 
 <script>
+    // 気象庁基準の色定義
     const COLORS = {
         'none': 'transparent',
-        'advisory': '#faff00', // 黄色
-        'warning': '#ff2800',  // 赤色
-        'major': '#ff00ff'     // 紫色
+        'advisory': '#faff00', // 津波注意報 (黄)
+        'warning': '#ff2800',  // 津波警報 (赤)
+        'major': '#ff00ff'     // 大津波警報 (紫)
     };
 
-    // 地図の初期化（タイルは読み込まない）
+    // 地図の初期化
     var map = L.map('map', {
         zoomSnap: 0.1,
-        attributionControl: false
+        attributionControl: false,
+        zoomControl: false // ボタンが邪魔なら非表示
     }).setView([36.5, 137.0], 5.5);
 
     var areaData = {};
 
-    // 1. 都道府県境界（背景）を読み込む
-    // ※ prefectures.json という名前でアップロードしておいてください
+    // 1. 都道府県境界（背景の陸地）を読み込む
     fetch('prefectures.json').then(res => res.json()).then(data => {
         const layerName = Object.keys(data.objects)[0];
         const geoData = topojson.feature(data, data.objects[layerName]);
         L.geoJSON(geoData, {
-            style: { color: "#555", weight: 1, fillColor: "#222", fillOpacity: 1 }
+            style: { 
+                color: "#444",      // 境界線の色
+                weight: 1, 
+                fillColor: "#ccc",  // 陸地の明るいグレー
+                fillOpacity: 1 
+            }
         }).addTo(map);
-    }).catch(e => console.log("都道府県データは未ロードです"));
+    }).catch(e => console.log("prefectures.json が見つかりません。背景は表示されません。"));
 
     // 2. 津波予報区（メイン）を読み込む
     fetch('areas.json').then(res => res.json()).then(data => {
@@ -63,11 +76,18 @@
 
         const geoJsonLayer = L.geoJSON(geoData, {
             style: function(feature) {
-                return { fillColor: 'transparent', weight: 1.5, color: 'white', fillOpacity: 0.9 };
+                return { 
+                    fillColor: 'transparent', 
+                    fillOpacity: 0,
+                    weight: 1.5, 
+                    color: '#666', // 普段の海岸線 
+                    lineJoin: 'round',
+                    lineCap: 'round'
+                };
             },
             onEachFeature: function (feature, layer) {
-                // nameプロパティがない場合の対策
-                const name = feature.properties.name || feature.properties.NAM || "不明なエリア";
+                // name または NAM から地域名を取得
+                const name = feature.properties.name || feature.properties.NAM || "不明";
                 areaData[name] = { layer: layer, status: 'none' };
             }
         }).addTo(map);
@@ -75,11 +95,11 @@
         createControls();
     });
 
+    // サイドバーのリスト作成
     function createControls() {
         const container = document.getElementById('controls');
         container.innerHTML = '';
         
-        // 地域名でソートしてリスト作成
         Object.keys(areaData).sort().forEach(name => {
             const div = document.createElement('div');
             div.className = 'area-item';
@@ -96,26 +116,47 @@
         });
     }
 
+    // 色と太さを更新するメイン関数
     function updateArea(name, status) {
         const item = areaData[name];
         if(item) {
             item.status = status;
-            item.layer.setStyle({
-                fillColor: COLORS[status],
-                fillOpacity: status === 'none' ? 0 : 0.9
-            });
-            // 警報以上なら線を太く目立たせる
-            item.layer.setStyle({ weight: status === 'none' ? 1.5 : 3 });
+            if (status === 'none') {
+                item.layer.setStyle({
+                    color: '#666',
+                    weight: 1.5,
+                    opacity: 1
+                });
+            } else {
+                // 画像2のように「極太」で色をつける
+                item.layer.setStyle({
+                    color: COLORS[status], 
+                    weight: 12,  // ここで太さを調整（画像2に合わせる）
+                    opacity: 1,
+                    lineJoin: 'round',
+                    lineCap: 'round'
+                });
+                // 重なりを最前面へ
+                item.layer.bringToFront();
+            }
         }
     }
 
+    // PNG保存
     function saveImage() {
         const container = document.querySelector("#map-container");
-        html2canvas(container).then(canvas => {
+        const btn = document.querySelector(".save-btn");
+        btn.innerText = "生成中...";
+        
+        html2canvas(container, {
+            useCORS: true,
+            scale: 2 // 高画質で保存
+        }).then(canvas => {
             const link = document.createElement("a");
-            link.download = "tsunami_simulation.png";
+            link.download = `tsunami_sim_${Date.now()}.png`;
             link.href = canvas.toDataURL();
             link.click();
+            btn.innerText = "PNG画像を生成・保存";
         });
     }
 </script>
