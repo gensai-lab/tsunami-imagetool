@@ -8,22 +8,22 @@
     <script src="https://unpkg.com/topojson-client@3"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
-        body { margin: 0; display: flex; font-family: sans-serif; background: #222; color: white; }
-        #sidebar { width: 300px; height: 100vh; overflow-y: auto; background: #333; padding: 10px; box-sizing: border-box; }
-        #map-container { flex-grow: 1; position: relative; }
-        #map { width: 100%; height: 100vh; background: #000033; }
-        .area-item { margin-bottom: 5px; font-size: 12px; border-bottom: 1px solid #444; padding: 5px; }
-        .save-btn { width: 100%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; margin-bottom: 15px; font-weight: bold; }
-        .save-btn:hover { background: #0056b3; }
-        select { background: #444; color: white; border: 1px solid #666; }
+        body { margin: 0; display: flex; font-family: "Helvetica Neue", Arial, sans-serif; background: #1a1a1a; color: white; }
+        #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; }
+        #map-container { flex-grow: 1; position: relative; background: #000022; } /* 宇宙のような深い紺 */
+        #map { width: 100%; height: 100vh; background: transparent; }
+        .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+        .save-btn { width: 100%; padding: 12px; background: #28a745; color: white; border: none; cursor: pointer; margin-bottom: 20px; font-weight: bold; border-radius: 4px; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }
+        h3 { border-bottom: 2px solid #007bff; padding-bottom: 5px; font-size: 16px; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
-    <button class="save-btn" onclick="saveImage()">PNG画像を保存</button>
-    <h3>津波予報区設定</h3>
-    <div id="controls">読み込み中...</div>
+    <button class="save-btn" onclick="saveImage()">PNG画像を生成・保存</button>
+    <h3>津波予報区の設定</h3>
+    <div id="controls">データを読み込み中...</div>
 </div>
 
 <div id="map-container">
@@ -31,94 +31,93 @@
 </div>
 
 <script>
-    // 色の定義
     const COLORS = {
         'none': 'transparent',
-        'advisory': '#faff00', // 津波注意報 (黄)
-        'warning': '#ff2800',  // 津波警報 (赤)
-        'major': '#ff00ff'     // 大津波警報 (紫)
+        'advisory': '#faff00', // 黄色
+        'warning': '#ff2800',  // 赤色
+        'major': '#ff00ff'     // 紫色
     };
 
-    var map = L.map('map').setView([36.0, 137.0], 5);
-    var geoJsonLayer;
-    var areaData = {}; // 状態管理用
+    // 地図の初期化（タイルは読み込まない）
+    var map = L.map('map', {
+        zoomSnap: 0.1,
+        attributionControl: false
+    }).setView([36.5, 137.0], 5.5);
 
-    // 背景を暗いニュース風に（タイルを使わずシンプルにする場合）
-    map.attributionControl.setPrefix('みんなの減災ラボ');
+    var areaData = {};
 
-    // 1. TopoJSONデータの読み込み
-    fetch('areas.json')
-        .then(res => res.json())
-        .then(topoData => {
-            // TopoJSONをGeoJSONに変換 (レイヤー名はmapshaperでの名前を確認)
-            const layerName = Object.keys(topoData.objects)[0];
-            const geoData = topojson.feature(topoData, topoData.objects[layerName]);
+    // 1. 都道府県境界（背景）を読み込む
+    // ※ prefectures.json という名前でアップロードしておいてください
+    fetch('prefectures.json').then(res => res.json()).then(data => {
+        const layerName = Object.keys(data.objects)[0];
+        const geoData = topojson.feature(data, data.objects[layerName]);
+        L.geoJSON(geoData, {
+            style: { color: "#555", weight: 1, fillColor: "#222", fillOpacity: 1 }
+        }).addTo(map);
+    }).catch(e => console.log("都道府県データは未ロードです"));
 
-            geoJsonLayer = L.geoJSON(geoData, {
-                style: {
-                    fillColor: 'transparent',
-                    weight: 1,
-                    opacity: 1,
-                    color: 'white',
-                    fillOpacity: 0.8
-                },
-                onEachFeature: function (feature, layer) {
-                    const name = feature.properties.name;
-                    areaData[name] = { layer: layer, status: 'none' };
-                }
-            }).addTo(map);
+    // 2. 津波予報区（メイン）を読み込む
+    fetch('areas.json').then(res => res.json()).then(data => {
+        const layerName = Object.keys(data.objects)[0];
+        const geoData = topojson.feature(data, data.objects[layerName]);
 
-            createControls();
-        });
+        const geoJsonLayer = L.geoJSON(geoData, {
+            style: function(feature) {
+                return { fillColor: 'transparent', weight: 1.5, color: 'white', fillOpacity: 0.9 };
+            },
+            onEachFeature: function (feature, layer) {
+                // nameプロパティがない場合の対策
+                const name = feature.properties.name || feature.properties.NAM || "不明なエリア";
+                areaData[name] = { layer: layer, status: 'none' };
+            }
+        }).addTo(map);
 
-    // 2. サイドバーに操作パネルを作成
+        createControls();
+    });
+
     function createControls() {
         const container = document.getElementById('controls');
         container.innerHTML = '';
         
-        // 名前順にソートして並べる
+        // 地域名でソートしてリスト作成
         Object.keys(areaData).sort().forEach(name => {
             const div = document.createElement('div');
             div.className = 'area-item';
             div.innerHTML = `
-                <label>${name}</label><br>
+                <span>${name}</span>
                 <select onchange="updateArea('${name}', this.value)">
-                    <option value="none">予報なし</option>
+                    <option value="none">ー</option>
                     <option value="advisory">注意報</option>
                     <option value="warning">警報</option>
-                    <option value="major">大津波警報</option>
+                    <option value="major">大特警</option>
                 </select>
             `;
             container.appendChild(div);
         });
     }
 
-    // 3. 色の更新
     function updateArea(name, status) {
         const item = areaData[name];
-        item.status = status;
-        item.layer.setStyle({
-            fillColor: COLORS[status],
-            fillOpacity: status === 'none' ? 0 : 0.8
-        });
+        if(item) {
+            item.status = status;
+            item.layer.setStyle({
+                fillColor: COLORS[status],
+                fillOpacity: status === 'none' ? 0 : 0.9
+            });
+            // 警報以上なら線を太く目立たせる
+            item.layer.setStyle({ weight: status === 'none' ? 1.5 : 3 });
+        }
     }
 
-    // 4. 画像保存
     function saveImage() {
-        const btn = document.querySelector('.save-btn');
-        btn.innerText = "生成中...";
-        html2canvas(document.querySelector("#map"), {
-            useCORS: true,
-            backgroundColor: '#000033'
-        }).then(canvas => {
+        const container = document.querySelector("#map-container");
+        html2canvas(container).then(canvas => {
             const link = document.createElement("a");
-            link.download = `tsunami_map_${Date.now()}.png`;
-            link.href = canvas.toDataURL("image/png");
+            link.download = "tsunami_simulation.png";
+            link.href = canvas.toDataURL();
             link.click();
-            btn.innerText = "PNG画像を保存";
         });
     }
 </script>
-
 </body>
 </html>
