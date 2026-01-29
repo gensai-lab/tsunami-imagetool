@@ -12,6 +12,10 @@
         #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; z-index: 1000; }
         #map-container { flex-grow: 1; position: relative; background: #104080; } 
         #map { width: 100%; height: 100vh; background: transparent; }
+        
+        /* バージョン表記のスタイル */
+        .version-info { font-size: 11px; color: #888; text-align: right; margin-bottom: 5px; }
+        
         .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 4px; }
         .save-btn { width: 100%; padding: 12px; background: #28a745; color: white; border: none; cursor: pointer; margin-bottom: 20px; font-weight: bold; border-radius: 4px; }
         select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }
@@ -21,6 +25,7 @@
 <body>
 
 <div id="sidebar">
+    <div class="version-info">Version 1.1.0</div>
     <button class="save-btn" onclick="saveImage()">PNG画像を生成・保存</button>
     <h3>津波予報区の設定</h3>
     <div id="controls">データを読み込み中...</div>
@@ -33,21 +38,18 @@
 <script>
     const COLORS = {
         'none': 'transparent',
-        'advisory': '#faff00', // 津波注意報 (黄)
-        'warning': '#ff2800',  // 津波警報 (赤)
-        'major': '#ff00ff'     // 大津波警報 (紫)
+        'advisory': '#faff00', // 注意報
+        'warning': '#ff2800',  // 警報
+        'major': '#ff00ff'     // 大特警
     };
 
-    // --- 太さの設定（ここを調整すると全体が変わります） ---
-    const BASE_WEIGHT = 14; // 大津波警報の太さ
-    const SUB_WEIGHT = BASE_WEIGHT * 0.5; // 警報・注意報の太さ (0.5倍 = 7)
+    // 重要度ランク（重なり順の制御用）
+    const RANK = { 'none': 0, 'advisory': 1, 'warning': 2, 'major': 3 };
 
-    var map = L.map('map', {
-        zoomSnap: 0.1,
-        attributionControl: false,
-        zoomControl: false 
-    }).setView([36.5, 137.0], 5.5);
+    const BASE_WEIGHT = 14; 
+    const SUB_WEIGHT = 7; 
 
+    var map = L.map('map', { zoomSnap: 0.1, attributionControl: false, zoomControl: false }).setView([36.5, 137.0], 5.5);
     var areaData = {};
 
     // 1. 都道府県境界（背景）
@@ -63,6 +65,9 @@
     fetch('areas.json').then(res => res.json()).then(data => {
         const layerName = Object.keys(data.objects)[0];
         const geoData = topojson.feature(data, data.objects[layerName]);
+        
+        // 境界線を綺麗に見せるために2層構造にする（下層に黒い縁取り用レイヤーを自動生成も可能ですが、
+        // 今回はシンプルに描画順を制御します）
         const geoJsonLayer = L.geoJSON(geoData, {
             style: { fillColor: 'transparent', fillOpacity: 0, weight: 1.5, color: '#666', lineJoin: 'round', lineCap: 'round' },
             onEachFeature: function (feature, layer) {
@@ -84,44 +89,26 @@
         });
     }
 
-    // 太さの比率を適用する関数
     function updateArea(name, status) {
         const item = areaData[name];
         if(!item) return;
-
         item.status = status;
-        let weightValue;
-        
-        if (status === 'none') {
-            weightValue = 1.5;
-            item.layer.setStyle({ color: '#666', weight: weightValue });
-        } else {
-            // 大津波警報ならBASE_WEIGHT(14)、それ以外ならSUB_WEIGHT(7)を適用
-            weightValue = (status === 'major') ? BASE_WEIGHT : SUB_WEIGHT;
-            
-            item.layer.setStyle({
-                color: COLORS[status], 
-                weight: weightValue,
-                opacity: 1,
-                lineJoin: 'round',
-                lineCap: 'round'
-            });
-            item.layer.bringToFront();
-        }
+
+        // すべてのレイヤーを再描画して、重なり順を正しく保つ
+        // (重要度が高いものを常に上に持ってくる処理)
+        renderAllLayers();
     }
 
-    function saveImage() {
-        const container = document.querySelector("#map-container");
-        const btn = document.querySelector(".save-btn");
-        btn.innerText = "生成中...";
-        html2canvas(container, { useCORS: true, scale: 2 }).then(canvas => {
-            const link = document.createElement("a");
-            link.download = `tsunami_map_${Date.now()}.png`;
-            link.href = canvas.toDataURL();
-            link.click();
-            btn.innerText = "PNG画像を生成・保存";
-        });
-    }
-</script>
-</body>
-</html>
+    function renderAllLayers() {
+        // 重なり順を制御するために、ランク順に並べ替えて bringToFront する
+        const sortedAreas = Object.values(areaData).sort((a, b) => RANK[a.status] - RANK[b.status]);
+        
+        sortedAreas.forEach(item => {
+            const status = item.status;
+            if (status === 'none') {
+                item.layer.setStyle({ color: '#666', weight: 1.5, opacity: 1 });
+            } else {
+                const weightValue = (status === 'major') ? BASE_WEIGHT : SUB_WEIGHT;
+                item.layer.setStyle({
+                    color: COLORS[status],
+                    weight: weightValue,
