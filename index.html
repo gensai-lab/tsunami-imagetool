@@ -9,19 +9,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         body { margin: 0; display: flex; font-family: "Helvetica Neue", Arial, sans-serif; background: #1a1a1a; color: white; overflow: hidden; }
-        
-        /* サイドバーの設定 */
         #sidebar { width: 320px; height: 100vh; overflow-y: auto; background: #252525; padding: 15px; box-sizing: border-box; border-right: 1px solid #444; z-index: 1000; }
-        
-        /* マップエリアの設定（画像2に近い鮮やかな青） */
         #map-container { flex-grow: 1; position: relative; background: #104080; } 
         #map { width: 100%; height: 100vh; background: transparent; }
-        
-        /* UIパーツ */
         .area-item { margin-bottom: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 4px; }
         .save-btn { width: 100%; padding: 12px; background: #28a745; color: white; border: none; cursor: pointer; margin-bottom: 20px; font-weight: bold; border-radius: 4px; }
-        .save-btn:hover { background: #218838; }
-        select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; cursor: pointer; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 3px; border-radius: 3px; }
         h3 { border-bottom: 2px solid #007bff; padding-bottom: 5px; font-size: 16px; margin-top: 0; }
     </style>
 </head>
@@ -38,7 +31,6 @@
 </div>
 
 <script>
-    // 気象庁基準の色定義
     const COLORS = {
         'none': 'transparent',
         'advisory': '#faff00', // 津波注意報 (黄)
@@ -46,119 +38,45 @@
         'major': '#ff00ff'     // 大津波警報 (紫)
     };
 
-    // 地図の初期化
+    // --- 太さの設定（ここを調整すると全体が変わります） ---
+    const BASE_WEIGHT = 14; // 大津波警報の太さ
+    const SUB_WEIGHT = BASE_WEIGHT * 0.5; // 警報・注意報の太さ (0.5倍 = 7)
+
     var map = L.map('map', {
         zoomSnap: 0.1,
         attributionControl: false,
-        zoomControl: false // ボタンが邪魔なら非表示
+        zoomControl: false 
     }).setView([36.5, 137.0], 5.5);
 
     var areaData = {};
 
-    // 1. 都道府県境界（背景の陸地）を読み込む
+    // 1. 都道府県境界（背景）
     fetch('prefectures.json').then(res => res.json()).then(data => {
         const layerName = Object.keys(data.objects)[0];
         const geoData = topojson.feature(data, data.objects[layerName]);
         L.geoJSON(geoData, {
-            style: { 
-                color: "#444",      // 境界線の色
-                weight: 1, 
-                fillColor: "#ccc",  // 陸地の明るいグレー
-                fillOpacity: 1 
-            }
+            style: { color: "#444", weight: 1, fillColor: "#ccc", fillOpacity: 1 }
         }).addTo(map);
-    }).catch(e => console.log("prefectures.json が見つかりません。背景は表示されません。"));
+    }).catch(e => console.log("都道府県背景なし"));
 
-    // 2. 津波予報区（メイン）を読み込む
+    // 2. 津波予報区
     fetch('areas.json').then(res => res.json()).then(data => {
         const layerName = Object.keys(data.objects)[0];
         const geoData = topojson.feature(data, data.objects[layerName]);
-
         const geoJsonLayer = L.geoJSON(geoData, {
-            style: function(feature) {
-                return { 
-                    fillColor: 'transparent', 
-                    fillOpacity: 0,
-                    weight: 1.5, 
-                    color: '#666', // 普段の海岸線 
-                    lineJoin: 'round',
-                    lineCap: 'round'
-                };
-            },
+            style: { fillColor: 'transparent', fillOpacity: 0, weight: 1.5, color: '#666', lineJoin: 'round', lineCap: 'round' },
             onEachFeature: function (feature, layer) {
-                // name または NAM から地域名を取得
                 const name = feature.properties.name || feature.properties.NAM || "不明";
                 areaData[name] = { layer: layer, status: 'none' };
             }
         }).addTo(map);
-
         createControls();
     });
 
-    // サイドバーのリスト作成
     function createControls() {
         const container = document.getElementById('controls');
         container.innerHTML = '';
-        
         Object.keys(areaData).sort().forEach(name => {
             const div = document.createElement('div');
             div.className = 'area-item';
-            div.innerHTML = `
-                <span>${name}</span>
-                <select onchange="updateArea('${name}', this.value)">
-                    <option value="none">ー</option>
-                    <option value="advisory">注意報</option>
-                    <option value="warning">警報</option>
-                    <option value="major">大特警</option>
-                </select>
-            `;
-            container.appendChild(div);
-        });
-    }
-
-    // 色と太さを更新するメイン関数
-    function updateArea(name, status) {
-        const item = areaData[name];
-        if(item) {
-            item.status = status;
-            if (status === 'none') {
-                item.layer.setStyle({
-                    color: '#666',
-                    weight: 1.5,
-                    opacity: 1
-                });
-            } else {
-                // 画像2のように「極太」で色をつける
-                item.layer.setStyle({
-                    color: COLORS[status], 
-                    weight: 12,  // ここで太さを調整（画像2に合わせる）
-                    opacity: 1,
-                    lineJoin: 'round',
-                    lineCap: 'round'
-                });
-                // 重なりを最前面へ
-                item.layer.bringToFront();
-            }
-        }
-    }
-
-    // PNG保存
-    function saveImage() {
-        const container = document.querySelector("#map-container");
-        const btn = document.querySelector(".save-btn");
-        btn.innerText = "生成中...";
-        
-        html2canvas(container, {
-            useCORS: true,
-            scale: 2 // 高画質で保存
-        }).then(canvas => {
-            const link = document.createElement("a");
-            link.download = `tsunami_sim_${Date.now()}.png`;
-            link.href = canvas.toDataURL();
-            link.click();
-            btn.innerText = "PNG画像を生成・保存";
-        });
-    }
-</script>
-</body>
-</html>
+            div.innerHTML = `<span>${name}</span><select onchange="updateArea('${name}', this.value)"><option value="none">ー</option><option value="advisory">注意報</option><option value="warning">警報</option><option value="major">大特警</option
