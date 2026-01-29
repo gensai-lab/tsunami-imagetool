@@ -79,4 +79,49 @@
         Object.keys(areaData).sort().forEach(name => {
             const div = document.createElement('div');
             div.className = 'area-item';
-            div.innerHTML = `<span>${name}</span><select onchange="updateArea('${name}', this.value)"><option value="none">ー</option><option value="advisory">注意報</option><option value="warning">警報</option><option value="major">大特警</option
+            div.innerHTML = `<span>${name}</span><select onchange="updateArea('${name}', this.value)"><option value="none">ー</option><option value="advisory">注意報</option><option value="warning">警報</option><option value="major">大特警</option></select>`;
+            container.appendChild(div);
+        });
+    }
+
+    // 太さの比率を適用する関数
+    function updateArea(name, status) {
+        const item = areaData[name];
+        if(!item) return;
+
+        item.status = status;
+        let weightValue;
+        
+        if (status === 'none') {
+            weightValue = 1.5;
+            item.layer.setStyle({ color: '#666', weight: weightValue });
+        } else {
+            // 大津波警報ならBASE_WEIGHT(14)、それ以外ならSUB_WEIGHT(7)を適用
+            weightValue = (status === 'major') ? BASE_WEIGHT : SUB_WEIGHT;
+            
+            item.layer.setStyle({
+                color: COLORS[status], 
+                weight: weightValue,
+                opacity: 1,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+            item.layer.bringToFront();
+        }
+    }
+
+    function saveImage() {
+        const container = document.querySelector("#map-container");
+        const btn = document.querySelector(".save-btn");
+        btn.innerText = "生成中...";
+        html2canvas(container, { useCORS: true, scale: 2 }).then(canvas => {
+            const link = document.createElement("a");
+            link.download = `tsunami_map_${Date.now()}.png`;
+            link.href = canvas.toDataURL();
+            link.click();
+            btn.innerText = "PNG画像を生成・保存";
+        });
+    }
+</script>
+</body>
+</html>
